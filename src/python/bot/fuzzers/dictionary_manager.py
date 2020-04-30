@@ -115,12 +115,13 @@ def merge_dictionary_files(original_dictionary_path,
   """Merge a list of dictionaries with given paths into a singe dictionary."""
   if original_dictionary_path and os.path.exists(original_dictionary_path):
     merged_dictionary_data = utils.read_data_from_file(
-        original_dictionary_path, eval_data=False)
+        original_dictionary_path, eval_data=False).decode('utf-8')
   else:
     merged_dictionary_data = ''
 
   recommended_dictionary_lines = utils.read_data_from_file(
-      recommended_dictionary_path, eval_data=False).splitlines()
+      recommended_dictionary_path,
+      eval_data=False).decode('utf-8').splitlines()
 
   dictionary_lines_to_add = set()
   for line in recommended_dictionary_lines:
@@ -216,11 +217,11 @@ class DictionaryManager(object):
   def _compare_and_swap_gcs_dictionary(self, old_content, new_content):
     """Compare and swap implementation for dictionary stored in GCS. Of course,
     this function is not atomic, but window for race is acceptably small."""
-    current_content = storage.read_data(self.gcs_path)
+    current_content = storage.read_data(self.gcs_path).decode('utf-8')
     if current_content != old_content:
       return False, current_content
 
-    storage.write_data(new_content, self.gcs_path)
+    storage.write_data(new_content.encode('utf-8'), self.gcs_path)
     return True, old_content
 
   def download_recommended_dictionary_from_gcs(self, local_dict_path):
@@ -340,11 +341,12 @@ class DictionaryManager(object):
     """
     # If the dictionary does not already exist, then directly update it.
     if not storage.exists(self.gcs_path):
-      storage.write_data('\n'.join(new_dictionary), self.gcs_path)
+      storage.write_data('\n'.join(new_dictionary).encode('utf-8'),
+                         self.gcs_path)
       return len(new_dictionary)
 
     # Read current version of the dictionary.
-    old_dictionary_data = storage.read_data(self.gcs_path)
+    old_dictionary_data = storage.read_data(self.gcs_path).decode('utf-8')
 
     # Use "Compare-and-swap"-like approach to avoid race conditions and also to
     # avoid having a separate job merging multiple recommended dictionaries.

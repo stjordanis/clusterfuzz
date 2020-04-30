@@ -75,9 +75,9 @@ class Fuzzer(object):
     production). """
     # Strip any sanitizer extensions
     tgt = os.path.splitext(tgt)[0]
-    return ((pkg == 'example_fuzzers' and tgt != 'oom_fuzzer') or
-            (pkg == 'zircon_fuzzers' and tgt == 'noop-fuzzer') or
-            (pkg == 'go_fuzzers' and tgt == 'basic_fuzzer'))
+    return ((pkg == 'example-fuzzers' and
+             tgt not in ('out_of_memory_fuzzer', 'toy_example_arbitrary')) or
+            (pkg == 'zircon_fuzzers' and tgt == 'noop-fuzzer'))
 
   @classmethod
   def filter(cls, fuzzers, name, sanitizer=None, example_fuzzers=True):
@@ -153,8 +153,11 @@ class Fuzzer(object):
                                           self.tgt)
     self._foreground = foreground
 
+    # Required for backwards compatibility with older builds where Zircon
+    # fuzzers had a sanitizer suffix
     if pkg == 'zircon_fuzzers' and sanitizer:
-      self.tgt += '.' + sanitizer
+      if (pkg, tgt) not in self.host.fuzzers:
+        self.tgt += '.' + sanitizer
 
   def __str__(self):
     return self.pkg + '/' + self.tgt

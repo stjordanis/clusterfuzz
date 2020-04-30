@@ -52,6 +52,23 @@ def prune_corpus(request, _):
   result = corpus_pruning_task.do_corpus_pruning(
       context, request.last_execution_failed, request.revision)
 
+  cross_pollination_stats = None
+  if result.cross_pollination_stats:
+    cross_pollination_stats = untrusted_runner_pb2.CrossPollinationStats(
+        project_qualified_name=result.cross_pollination_stats.
+        project_qualified_name,
+        method=result.cross_pollination_stats.method,
+        sources=result.cross_pollination_stats.sources,
+        tags=result.cross_pollination_stats.tags,
+        initial_corpus_size=result.cross_pollination_stats.initial_corpus_size,
+        corpus_size=result.cross_pollination_stats.corpus_size,
+        initial_edge_coverage=result.cross_pollination_stats.
+        initial_edge_coverage,
+        edge_coverage=result.cross_pollination_stats.edge_coverage,
+        initial_feature_coverage=result.cross_pollination_stats.
+        initial_feature_coverage,
+        feature_coverage=result.cross_pollination_stats.feature_coverage)
+
   # Intentionally skip edge and function coverage values as those would come
   # from fuzzer coverage cron task (see src/go/server/cron/coverage.go).
   coverage_info = untrusted_runner_pb2.CoverageInfo(
@@ -78,7 +95,8 @@ def prune_corpus(request, _):
       coverage_info=coverage_info,
       crashes=crashes,
       fuzzer_binary_name=result.fuzzer_binary_name,
-      revision=result.revision)
+      revision=result.revision,
+      cross_pollination_stats=cross_pollination_stats)
 
 
 def process_testcase(request, _):

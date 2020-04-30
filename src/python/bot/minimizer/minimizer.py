@@ -38,11 +38,6 @@ MAX_MERGE_BATCH_SIZE = 32
 PROGRESS_REPORT_INTERVAL = 300
 
 
-class AntlrDecodeError(Exception):
-  """Raised when Antlr can't minimize input because it is not unicode."""
-  pass
-
-
 class DummyLock(object):
   """Dummy to replace threading.Lock for single-threaded tests."""
 
@@ -156,7 +151,7 @@ class Testcase(object):
       try:
         self.tokens = minimizer.tokenizer(data)
       except UnicodeDecodeError:
-        raise AntlrDecodeError
+        raise errors.AntlrDecodeError
     else:
       self.tokens = data
 
@@ -498,12 +493,12 @@ class Testcase(object):
 
 def _default_tokenizer(s):
   """Default string tokenizer which splits on newlines."""
-  return s.split('\n')
+  return s.split(b'\n')
 
 
 def _default_combiner(tokens):
   """Default token combiner which assumes each token is a line."""
-  return '\n'.join(tokens)
+  return b'\n'.join(tokens)
 
 
 class Minimizer(object):
@@ -577,7 +572,8 @@ class Minimizer(object):
       # that had been done up to that point.
       testcase = error.testcase
     except errors.TokenizationFailureError:
-      logs.log_error('Tokenized data did not match original data.')
+      logs.log('Tokenized data did not match original data. Defaulting to line'
+               'minimization.')
       # In situation where the tokenizer does not work, we still want to use
       # the token combiner. This will not change the data unless
       # token combiner changes the data such as appending extra data to the

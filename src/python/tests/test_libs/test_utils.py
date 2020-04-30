@@ -137,6 +137,13 @@ def python2_only(func):
                              func)
 
 
+def python3_only(func):
+  """Tests which can only run on Python 3."""
+  return unittest.skipIf(sys.version_info.major != 3,
+                         'Skipping Python 3-only test.')(
+                             func)
+
+
 def android_device_required(func):
   """Skip Android-specific tests if we cannot run them."""
   reason = None
@@ -217,15 +224,20 @@ def wait_for_emulator_ready(proc,
   return thread
 
 
-def start_cloud_emulator(emulator, args=None, data_dir=None):
+def start_cloud_emulator(emulator,
+                         args=None,
+                         data_dir=None,
+                         store_on_disk=False):
   """Start a cloud emulator."""
   ready_indicators = {
       'datastore': b'is now running',
       'pubsub': b'Server started',
   }
 
+  store_on_disk_flag = ('--store-on-disk'
+                        if store_on_disk else '--no-store-on-disk')
   default_flags = {
-      'datastore': ['--no-store-on-disk', '--consistency=1'],
+      'datastore': [store_on_disk_flag, '--consistency=1'],
       'pubsub': [],
   }
 
@@ -367,12 +379,17 @@ def supported_platforms(*platforms):
   return decorator
 
 
-class MockStdout(io.BufferedWriter):
-  """Mock stdout."""
+# TODO(ochang): Remove once migrated to Python 3.
+if sys.version_info.major == 2:
 
-  def __init__(self):
-    super(MockStdout, self).__init__(io.BytesIO())
+  class MockStdout(io.BufferedWriter):
+    """Mock stdout."""
 
-  def getvalue(self):
-    self.flush()
-    return self.raw.getvalue()
+    def __init__(self):
+      super(MockStdout, self).__init__(io.BytesIO())
+
+    def getvalue(self):
+      self.flush()
+      return self.raw.getvalue()
+else:
+  MockStdout = io.StringIO  # pylint: disable=invalid-name

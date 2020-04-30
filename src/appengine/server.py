@@ -13,7 +13,6 @@
 # limitations under the License.
 """server.py initialises the appengine server for ClusterFuzz."""
 from __future__ import absolute_import
-import logging
 
 from webapp2_extras import routes
 import webapp2
@@ -54,6 +53,7 @@ from handlers.cron import manage_vms
 from handlers.cron import ml_train
 from handlers.cron import oss_fuzz_apply_ccs
 from handlers.cron import oss_fuzz_build_status
+from handlers.cron import oss_fuzz_generate_certs
 from handlers.cron import predator_pull
 from handlers.cron import project_setup
 from handlers.cron import recurring_tasks
@@ -79,6 +79,7 @@ from handlers.testcase_detail import remove_issue
 from handlers.testcase_detail import testcase_variants
 from handlers.testcase_detail import update_from_trunk
 from handlers.testcase_detail import update_issue
+from metrics import logs
 
 _is_chromium = utils.is_chromium()
 _is_oss_fuzz = utils.is_oss_fuzz()
@@ -138,6 +139,7 @@ _CRON_ROUTES = [
     ('/manage-vms', manage_vms.Handler),
     ('/oss-fuzz-apply-ccs', oss_fuzz_apply_ccs.Handler),
     ('/oss-fuzz-build-status', oss_fuzz_build_status.Handler),
+    ('/oss-fuzz-generate-certs', oss_fuzz_generate_certs.Handler),
     ('/project-setup', project_setup.Handler),
     ('/predator-pull', predator_pull.Handler),
     ('/schedule-corpus-pruning', schedule_corpus_pruning.Handler),
@@ -224,7 +226,7 @@ _ROUTES = [
     ('/viewer', viewer.Handler),
 ]
 
-logging.getLogger().setLevel(logging.INFO)
+logs.configure('appengine')
 
 config = local_config.GAEConfig()
 main_domain = config.get('domains.main')

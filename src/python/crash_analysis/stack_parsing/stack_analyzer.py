@@ -97,7 +97,7 @@ CHROME_MAC_STACK_FRAME_REGEX = re.compile(
     r'([^/\\]+)\s*\+\s*'  # fun (6)
     r'(\d+)')  # off[dec] (7)
 MSAN_TSAN_REGEX = re.compile(
-    r'.*(ThreadSanitizer|MemorySanitizer):[ ]*([^(:]+)')
+    r'.*(ThreadSanitizer|MemorySanitizer):\s+(?!ABRT)(?!ILL)([^(:]+)')
 FATAL_ERROR_CHECK_FAILURE = re.compile(
     r'#\s+(Check failed: |RepresentationChangerError: node #\d+:)?(.*)')
 FATAL_ERROR_DCHECK_FAILURE = re.compile(r'#\s+(Debug check failed: )(.*)')
@@ -456,6 +456,7 @@ STACK_FRAME_IGNORE_REGEXES = [
     r'.*ieee754\-',
     r'.*libpthread',
     r'.*logger',
+    r'.*logging\:\:CheckError',
     r'.*logging\:\:ErrnoLogMessage',
     r'.*logging\:\:LogMessage',
     r'.*stdext\:\:exception\:\:what',
@@ -895,6 +896,7 @@ def add_frame_on_match(compiled_regex,
     pipe = subprocess.Popen(
         ['c++filt', '-n', frame], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     frame, _ = pipe.communicate()
+    frame = frame.decode('utf-8')
 
   # Try to parse the frame with the various stackframes.
   frame_struct = None

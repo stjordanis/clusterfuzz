@@ -66,9 +66,13 @@ CORPUS_PRUNING_TIMEOUT = 22 * 60 * 60
 SINGLE_UNIT_TIMEOUT = 5
 TIMEOUT_FLAG = '-timeout=%d' % SINGLE_UNIT_TIMEOUT
 
-# Corpus size limit for cases when corpus pruning task failed in the last
+# Corpus files limit for cases when corpus pruning task failed in the last
 # execution.
-CORPUS_SIZE_LIMIT_FOR_FAILURES = 10000
+CORPUS_FILES_LIMIT_FOR_FAILURES = 10000
+
+# Corpus total size limit for cases when corpus pruning task failed in the last
+# execution.
+CORPUS_SIZE_LIMIT_FOR_FAILURES = 2 * 1024 * 1024 * 1024  # 2 GB.
 
 # Maximum number of units to restore from quarantine in one run.
 MAX_QUARANTINE_UNITS_TO_RESTORE = 128
@@ -77,8 +81,11 @@ MAX_QUARANTINE_UNITS_TO_RESTORE = 128
 RSS_LIMIT = 2560
 RSS_LIMIT_MB_FLAG = '-rss_limit_mb=%d'
 
-# Flag to disable leak checking.
-DISABLE_LEAK_CHECK_FLAG = '-detect_leaks=0'
+# Flag to enforce length limit for a single corpus element.
+MAX_LEN_FLAG = '-max_len=%d'
+
+# Flag to control memory leaks detection.
+DETECT_LEAKS_FLAG = '-detect_leaks=%d'
 
 # Flag to do value profile during merges.
 USE_VALUE_PROFILE_FLAG = '-use_value_profile=%d'
@@ -93,11 +100,12 @@ SYNC_TIMEOUT = 2 * 60 * 60
 
 # Number of fuzz targets whose backup corpus is used to cross pollinate with our
 # current fuzz target corpus.
-CROSS_POLLINATE_FUZZER_COUNT = 5
+CROSS_POLLINATE_FUZZER_COUNT = 3
 
-CorpusPruningResult = collections.namedtuple(
-    'CorpusPruningResult',
-    ['coverage_info', 'crashes', 'fuzzer_binary_name', 'revision'])
+CorpusPruningResult = collections.namedtuple('CorpusPruningResult', [
+    'coverage_info', 'crashes', 'fuzzer_binary_name', 'revision',
+    'cross_pollination_stats'
+])
 
 CorpusCrash = collections.namedtuple('CorpusCrash', [
     'crash_state',
@@ -106,6 +114,12 @@ CorpusCrash = collections.namedtuple('CorpusCrash', [
     'crash_stacktrace',
     'unit_path',
     'security_flag',
+])
+
+CrossPollinationStats = collections.namedtuple('CrossPollinationStats', [
+    'project_qualified_name', 'method', 'sources', 'tags',
+    'initial_corpus_size', 'corpus_size', 'initial_edge_coverage',
+    'edge_coverage', 'initial_feature_coverage', 'feature_coverage'
 ])
 
 
@@ -122,24 +136,25 @@ def _get_corpus_file_paths(corpus_path):
   ]
 
 
-def _limit_corpus_size(corpus_url, size_limit):
-  """Limit number of files in a corpus url."""
-  files_list = list(storage.list_blobs(corpus_url))
-  corpus_size = len(files_list)
-
-  if corpus_size <= size_limit:
-    # Corpus directory size is within limit, no more work to do.
-    return
-
-  logs.log(
-      'Limit corpus at {corpus_url} from {corpus_size} to {size_limit}.'.format(
-          corpus_url=corpus_url, corpus_size=corpus_size,
-          size_limit=size_limit))
-  files_to_delete = random.sample(files_list, corpus_size - size_limit)
+def _limit_corpus_size(corpus_url):
+  """Limit number of files and size of a corpus."""
+  corpus_count = 0
+  corpus_size = 0
+  deleted_corpus_count = 0
   bucket, _ = storage.get_bucket_name_and_path(corpus_url)
-  for file_to_delete in files_to_delete:
-    path_to_delete = storage.get_cloud_storage_file_path(bucket, file_to_delete)
-    storage.delete(path_to_delete)
+  for corpus_file in storage.get_blobs(corpus_url):
+    corpus_count += 1
+    corpus_size += corpus_file['size']
+    if (corpus_count > CORPUS_FILES_LIMIT_FOR_FAILURES or
+        corpus_size > CORPUS_SIZE_LIMIT_FOR_FAILURES):
+      path_to_delete = storage.get_cloud_storage_file_path(
+          bucket, corpus_file['name'])
+      storage.delete(path_to_delete)
+      deleted_corpus_count += 1
+
+  if deleted_corpus_count:
+    logs.log('Removed %d files from oversized corpus: %s.' %
+             (deleted_corpus_count, corpus_url))
 
 
 def _get_time_remaining(start_time):
@@ -326,25 +341,35 @@ class Runner(object):
 
   def get_libfuzzer_flags(self):
     """Get default libFuzzer options."""
+    rss_limit = RSS_LIMIT
+    max_len = engine_common.CORPUS_INPUT_SIZE_LIMIT
+    detect_leaks = 1
+    arguments = [TIMEOUT_FLAG]
+
     if self.fuzzer_options:
+      # Default values from above can be customized for a given fuzz target.
       libfuzzer_arguments = self.fuzzer_options.get_engine_arguments(
           'libfuzzer')
 
-      # Allow some flags to be used from .options file for single unit testing.
-      # Allow specifying a lower rss_limit.
-      rss_limit = libfuzzer_arguments.get('rss_limit_mb', constructor=int)
-      if not rss_limit or rss_limit > RSS_LIMIT:
-        rss_limit = RSS_LIMIT
+      custom_rss_limit = libfuzzer_arguments.get(
+          'rss_limit_mb', constructor=int)
+      if custom_rss_limit and custom_rss_limit < rss_limit:
+        rss_limit = custom_rss_limit
+
+      custom_max_len = libfuzzer_arguments.get('max_len', constructor=int)
+      if custom_max_len and custom_max_len < max_len:
+        max_len = custom_max_len
 
       # Some targets might falsely report leaks all the time, so allow this to
       # be disabled.
-      detect_leaks = libfuzzer_arguments.get('detect_leaks', default='1')
-      arguments = [
-          RSS_LIMIT_MB_FLAG % rss_limit,
-          '-detect_leaks=%s' % detect_leaks, TIMEOUT_FLAG
-      ]
-    else:
-      arguments = [RSS_LIMIT_MB_FLAG % RSS_LIMIT, TIMEOUT_FLAG]
+      custom_detect_leaks = libfuzzer_arguments.get(
+          'detect_leaks', constructor=int)
+      if custom_detect_leaks is not None:
+        detect_leaks = custom_detect_leaks
+
+    arguments.append(RSS_LIMIT_MB_FLAG % rss_limit)
+    arguments.append(MAX_LEN_FLAG % max_len)
+    arguments.append(DETECT_LEAKS_FLAG % detect_leaks)
 
     corpus_size = shell.get_directory_file_count(
         self.context.initial_corpus_path)
@@ -527,44 +552,45 @@ class CrossPollinator(object):
           'Shared corpus merge finished successfully.',
           output=symbolized_output)
     except engine.TimeoutError as e:
-      logs.log_error('Corpus pruning timed out while merging shared corpus: ' +
-                     repr(e))
+      # Other cross pollinated fuzzer corpuses can have unexpected test cases
+      # that time us out. This is expected, so bail out.
+      logs.log_warn('Corpus pruning timed out while merging shared corpus\n' +
+                    repr(e))
       return None
     except engine.Error as e:
-      raise CorpusPruningException(
-          'Corpus pruning failed to merge shared corpus\n' + repr(e))
+      # Other cross pollinated fuzzer corpuses can be large, so we can run out
+      # of disk space and exception out. This is expected, so bail out.
+      logs.log_warn('Corpus pruning failed to merge shared corpus\n' + repr(e))
+      return None
 
     return result.stats
 
 
-def record_cross_pollination_stats(
-    pruner_stats, pollinator_stats, project_qualified_name, sources, tag,
-    initial_corpus_size, minimized_corpus_size_units, method):
+def _record_cross_pollination_stats(stats):
   """Log stats about cross pollination in BigQuery."""
-  # TODO(mpherman): Find a way to collect these stats for OSS Fuzz.
-  if environment.is_untrusted_worker():
-    return
-  # BigQuery not available in local development.This is necessary because the
-  # untrusted runner is in a separate process and can't be easily mocked.
-  if environment.get_value('LOCAL_DEVELOPMENT') or environment.get_value(
-      'PY_UNITTESTS'):
-    return
-
-  if not pruner_stats or not pollinator_stats:
+  # If no stats were gathered due to a timeout or lack of corpus, return.
+  if not stats:
     return
 
   bigquery_row = {
-      'project_qualified_name': project_qualified_name,
-      'method': method,
-      'sources': sources,
-      'tags': tag if tag else '',
-      'initial_corpus_size': initial_corpus_size,
-      'corpus_size': minimized_corpus_size_units,
-      'initial_edge_coverage': pruner_stats['edge_coverage'],
-      'edge_coverage': pollinator_stats['edge_coverage'],
-      'initial_feature_coverage': pruner_stats['feature_coverage'],
-      'feature_coverage': pollinator_stats['feature_coverage']
+      'project_qualified_name': stats.project_qualified_name,
+      'method': stats.method,
+      'sources': stats.sources,
+      'tags': stats.tags if stats.tags else '',
+      'initial_corpus_size': stats.initial_corpus_size,
+      'corpus_size': stats.corpus_size,
+      'initial_edge_coverage': stats.initial_edge_coverage,
+      'edge_coverage': stats.edge_coverage,
+      'initial_feature_coverage': stats.initial_feature_coverage,
+      'feature_coverage': stats.feature_coverage
   }
+
+  # BigQuery not available in local development. This is necessary because the
+  # untrusted runner is in a separate process and can't be easily mocked.
+  # Check here instead of earlier to test as much of the function as we can.
+  if environment.get_value('LOCAL_DEVELOPMENT') or environment.get_value(
+      'PY_UNITTESTS'):
+    return
 
   client = big_query.Client(
       dataset_id='main', table_id='cross_pollination_statistics')
@@ -582,11 +608,10 @@ def do_corpus_pruning(context, last_execution_failed, revision):
     return tasks_host.do_corpus_pruning(context, last_execution_failed,
                                         revision)
 
-  build_manager.setup_build(revision=revision)
-  build_directory = environment.get_value('BUILD_DIR')
-  if not build_directory:
+  if not build_manager.setup_build(revision=revision):
     raise CorpusPruningException('Failed to setup build.')
 
+  build_directory = environment.get_value('BUILD_DIR')
   start_time = datetime.datetime.utcnow()
   runner = Runner(build_directory, context)
   pruner = CorpusPruner(runner)
@@ -600,7 +625,7 @@ def do_corpus_pruning(context, last_execution_failed, revision):
         context.corpus.get_gcs_url(),
         context.quarantine_corpus.get_gcs_url()
     ]:
-      _limit_corpus_size(corpus_url, CORPUS_SIZE_LIMIT_FOR_FAILURES)
+      _limit_corpus_size(corpus_url)
 
   # Get initial corpus to process from GCS.
   context.sync_to_disk()
@@ -682,23 +707,25 @@ def do_corpus_pruning(context, last_execution_failed, revision):
 
   logs.log('Finished.')
 
-  result = CorpusPruningResult(
-      coverage_info=coverage_info,
-      crashes=list(crashes.values()),
-      fuzzer_binary_name=fuzzer_binary_name,
-      revision=environment.get_value('APP_REVISION'))
-
   sources = ','.join([
       fuzzer.fuzz_target.project_qualified_name()
       for fuzzer in context.cross_pollinate_fuzzers
   ])
 
-  record_cross_pollination_stats(
-      pruner_stats, pollinator_stats, project_qualified_name, sources,
-      context.tag, pre_pollination_corpus_size, minimized_corpus_size_units,
-      context.cross_pollination_method)
+  cross_pollination_stats = None
+  if pruner_stats and pollinator_stats:
+    cross_pollination_stats = CrossPollinationStats(
+        project_qualified_name, context.cross_pollination_method, sources,
+        context.tag, initial_corpus_size, pre_pollination_corpus_size,
+        pruner_stats['edge_coverage'], pollinator_stats['edge_coverage'],
+        pruner_stats['feature_coverage'], pollinator_stats['feature_coverage'])
 
-  return result
+  return CorpusPruningResult(
+      coverage_info=coverage_info,
+      crashes=list(crashes.values()),
+      fuzzer_binary_name=fuzzer_binary_name,
+      revision=environment.get_value('APP_REVISION'),
+      cross_pollination_stats=cross_pollination_stats)
 
 
 def _process_corpus_crashes(context, result):
@@ -884,7 +911,7 @@ def choose_cross_pollination_strategy(current_fuzzer_name):
     similar_targets = corpus_tagging.get_similarly_tagged_fuzzers(
         current_fuzzer_name)
     if similar_targets:
-      return (Pollination.TAGGED, random.choice(similar_targets.keys()))
+      return (Pollination.TAGGED, random.choice(list(similar_targets.keys())))
 
   return (Pollination.RANDOM, None)
 
@@ -931,9 +958,10 @@ def execute_task(full_fuzzer_name, job_type):
 
   try:
     result = do_corpus_pruning(context, last_execution_failed, revision)
+    _record_cross_pollination_stats(result.cross_pollination_stats)
     _save_coverage_information(context, result)
     _process_corpus_crashes(context, result)
-  except CorpusPruningException:
+  except Exception:
     logs.log_error('Corpus pruning failed.')
     data_handler.update_task_status(task_name, data_types.TaskState.ERROR)
     return

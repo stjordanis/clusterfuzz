@@ -22,7 +22,6 @@ standard_library.install_aliases()
 
 import copy
 import datetime
-import logging
 import os
 import queue
 import subprocess
@@ -127,10 +126,7 @@ def run_process(cmdline,
                 testcase_run=True,
                 ignore_children=True):
   """Executes a process with a given command line and other parameters."""
-  # FIXME(mbarbella): Using LAUNCHER_PATH here is error prone. It forces us to
-  # do certain operations before fuzzer setup (e.g. bad build check).
-  launcher = environment.get_value('LAUNCHER_PATH')
-  if environment.is_trusted_host() and testcase_run and not launcher:
+  if environment.is_trusted_host() and testcase_run:
     from bot.untrusted_runner import remote_process_host
     return remote_process_host.run_process(
         cmdline, current_working_directory, timeout, need_shell, gestures,
@@ -142,6 +138,9 @@ def run_process(cmdline,
   if env_copy:
     os.environ.update(env_copy)
 
+  # FIXME(mbarbella): Using LAUNCHER_PATH here is error prone. It forces us to
+  # do certain operations before fuzzer setup (e.g. bad build check).
+  launcher = environment.get_value('LAUNCHER_PATH')
   # This is used when running scripts on native linux OS and not on the device.
   # E.g. running a fuzzer to generate testcases or launcher script.
   plt = environment.platform()
@@ -177,8 +176,6 @@ def run_process(cmdline,
     gestures.pop()
   else:
     gesture_start_time = timeout // 2
-
-  logs.log('Process (%s) started.' % str(cmdline), level=logging.DEBUG)
 
   if plt == 'ANDROID':
     # Clear the log upfront.
@@ -310,7 +307,10 @@ def run_process(cmdline,
 
     # If the process is still running, then terminate it.
     if not process_status.finished:
-      if launcher and cmdline.startswith(launcher):
+      launcher_with_interpreter = shell.get_execute_command(
+          launcher, is_blackbox_fuzzer=True) if launcher else None
+      if (launcher_with_interpreter and
+          cmdline.startswith(launcher_with_interpreter)):
         # If this was a launcher script, we KILL all child processes created
         # except for APP_NAME.
         # It is expected that, if the launcher script terminated normally, it
@@ -347,10 +347,11 @@ def run_process(cmdline,
       output += utils.get_line_seperator('Memory Statistics')
       output += ps_output
 
-  logs.log(
-      'Process (%s) ended, exit code (%s), output (%s).' %
-      (repr(cmdline), str(return_code), output),
-      level=logging.DEBUG)
+  if return_code:
+    logs.log_warn(
+        'Process (%s) ended with exit code (%s).' % (repr(cmdline),
+                                                     str(return_code)),
+        output=output)
 
   return return_code, round(time.time() - start_time, 1), output
 

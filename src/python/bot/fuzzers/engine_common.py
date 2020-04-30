@@ -43,6 +43,9 @@ from system import minijail
 from system import new_process
 from system import shell
 
+# Maximum allowed size of a corpus file.
+CORPUS_INPUT_SIZE_LIMIT = 5 * 1024 * 1024
+
 # Number of testcases to use for the corpus subset strategy.
 # See https://crbug.com/682311 for more information.
 # Size 100 has a slightly higher chance as it seems to be the best one so far.
@@ -76,10 +79,6 @@ RADAMSA_MUTATIONS = 2000
 
 # Maximum number of seconds to run radamsa for.
 RADAMSA_TIMEOUT = 3
-
-# Maximum input size to mutate. This is restricted to avoid adding too many
-# large inputs in the new testcase mutations directory and filing up disk.
-RADAMSA_INPUT_FILE_SIZE_LIMIT = 2 * 1024 * 1024  # 2 Mb.
 
 
 class Generator(object):
@@ -173,8 +172,7 @@ def generate_new_testcase_mutations_using_radamsa(
   radamsa_runner = new_process.ProcessRunner(radamsa_path)
   files_list = shell.get_files_list(corpus_directory)
   filtered_files_list = [
-      f for f in files_list
-      if os.path.getsize(f) <= RADAMSA_INPUT_FILE_SIZE_LIMIT
+      f for f in files_list if os.path.getsize(f) <= CORPUS_INPUT_SIZE_LIMIT
   ]
   if not filtered_files_list:
     # No mutations to do on an empty corpus or one with very large files.
@@ -193,8 +191,14 @@ def generate_new_testcase_mutations_using_radamsa(
 
     result = radamsa_runner.run_and_wait(
         ['-o', output_path, original_file_path], timeout=RADAMSA_TIMEOUT)
-    if result.return_code or result.timed_out:
-      logs.log_error(
+
+    if (os.path.exists(output_path) and
+        os.path.getsize(output_path) > CORPUS_INPUT_SIZE_LIMIT):
+      # Skip large files to avoid furthur mutations and impact fuzzing
+      # efficiency.
+      shell.remove_file(output_path)
+    elif result.return_code or result.timed_out:
+      logs.log_warn(
           'Radamsa failed to mutate or timed out.', output=result.output)
 
     # Check if we exceeded our timeout. If yes, do no more mutations and break.
@@ -520,7 +524,7 @@ def strip_minijail_command(command, fuzzer_path):
 def write_data_to_file(content, file_path):
   """Writes data to file."""
   with open(file_path, 'wb') as file_handle:
-    file_handle.write(str(content))
+    file_handle.write(str(content).encode('utf-8'))
 
 
 class MinijailEngineFuzzerRunner(minijail.MinijailProcessRunner):

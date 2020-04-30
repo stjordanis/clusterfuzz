@@ -17,7 +17,6 @@ from builtins import map
 from builtins import range
 from builtins import str
 from future import utils as future_utils
-from past.builtins import basestring
 
 from future import standard_library
 standard_library.install_aliases()
@@ -100,17 +99,20 @@ def utc_datetime_to_timestamp(dt):
   return (dt - datetime.datetime.utcfromtimestamp(0)).total_seconds()
 
 
-# TODO(mbarbella): Clean up call-sites and delete this function. Any usage is
-# potentially indicative of poor tracking of encodings.
-def decode_to_unicode(obj, encoding='utf-8'):
+def decode_to_unicode(obj):
   """Decode object to unicode encoding."""
-  if isinstance(obj, basestring) and not isinstance(obj, str):
-    try:
-      obj = str(obj, encoding)
-    except:
-      obj = str(''.join(char for char in obj if ord(char) < 128), encoding)
+  if not hasattr(obj, 'decode'):
+    return obj
 
-  return obj
+  return obj.decode('utf-8', errors='ignore')
+
+
+def encode_as_unicode(obj):
+  """Encode a string as unicode, or leave bytes as they are."""
+  if not hasattr(obj, 'encode'):
+    return obj
+
+  return obj.encode('utf-8')
 
 
 @retry.wrap(
@@ -957,3 +959,10 @@ def newstr_to_native_str(s):
     newstr = str(s)
 
   return future_utils.native(newstr).encode('utf-8')
+
+
+def exc_clear():
+  """exc_clear wrapper. No-op on Python 3."""
+  # TODO(ochang): Remove this once migrated to Python 3.
+  if sys.version_info.major == 2:
+    sys.exc_clear()

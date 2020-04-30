@@ -668,7 +668,13 @@ class Build(BaseBuild):
       os.system('ln -s %s %s' % (app_directory, symbolic_link_target))
 
     if utils.is_chromium():
-      environment.set_value('FONTCONFIG_SYSROOT', app_directory)
+      # Use deterministic fonts when available. See crbug.com/822737.
+      # For production builds (stable, beta), assume that they support it.
+      if not isinstance(self.revision, int) or self.revision >= 635076:
+        environment.set_value('FONTCONFIG_SYSROOT', app_directory)
+      else:
+        # Remove if set during previous iterations of regression testing.
+        environment.remove_key('FONTCONFIG_SYSROOT')
 
     if environment.platform() != 'ANDROID':
       return
@@ -1144,7 +1150,7 @@ def _get_targets_list(bucket_path):
     return None
 
   # Filter out targets which are not yet built.
-  targets = data.splitlines()
+  targets = data.decode('utf-8').splitlines()
   listed_targets = set(
       os.path.basename(path.rstrip('/'))
       for path in storage.list_blobs(bucket_dir_path, recursive=False))
@@ -1481,9 +1487,10 @@ def get_rpaths(binary_path):
 
   try:
     rpaths = subprocess.check_output(
-        [chrpath, '-l', binary_path], stderr=subprocess.PIPE).strip()
+        [chrpath, '-l', binary_path],
+        stderr=subprocess.PIPE).strip().decode('utf-8')
   except subprocess.CalledProcessError as e:
-    if 'no rpath or runpath tag found' in e.output:
+    if b'no rpath or runpath tag found' in e.output:
       return []
 
     raise
